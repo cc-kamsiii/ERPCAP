@@ -1,8 +1,307 @@
-import { useState, useEffect, useCallback } from "react";
-import { LayoutDashboard, Package, ShoppingCart, Megaphone, Factory, Settings, ChevronRight, ChevronDown,ChevronLeft, Menu, X, Search, LogOut } from "lucide-react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import {
+  Search,
+  Plus,
+  X,
+  Upload,
+  ImageIcon,
+  Eye,
+  Pencil,
+  Archive,
+} from "lucide-react";
 import { supabase } from "../api/supabase";
 
 
+const isLowStock = (item) => (item.stock ?? 0) <= 5;
+
+const uploadImage = async (file) => {
+  const ext = file.name.split(".").pop();
+  const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+
+  const { error } = await supabase.storage
+    .from("products")
+    .upload(fileName, file, { upsert: false });
+
+  if (error) {
+    console.error("Storage upload error:", error);
+    return null;
+  }
+
+  const { data } = supabase.storage.from("products").getPublicUrl(fileName);
+  return data.publicUrl;
+};
+
+
+const EMPTY_FORM = {
+  product_code: "",
+  product_name: "",
+  category: "Women",
+  stock: "",
+  shopee_sold: "",
+  lazada_sold: "",
+  tiktok_sold: "",
+};
+
+function AddProductModal({ onClose, onSaved }) {
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const fileInputRef = useRef();
+
+  const set = (key, val) => setForm((p) => ({ ...p, [key]: val }));
+
+  const handleFile = (file) => {
+    if (!file) return;
+    setImageFile(file);
+    setImagePreview(URL.createObjectURL(file));
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    handleFile(e.dataTransfer.files[0]);
+  };
+
+  const handleSubmit = async () => {
+    if (!form.product_code.trim() || !form.product_name.trim()) {
+      setError("Product code and name are required.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+
+    let image_url = null;
+    if (imageFile) {
+      image_url = await uploadImage(imageFile);
+      if (!image_url) {
+        setError("Image upload failed. Check your Supabase storage bucket.");
+        setSaving(false);
+        return;
+      }
+    }
+
+    const shopee = parseInt(form.shopee_sold) || 0;
+    const lazada = parseInt(form.lazada_sold) || 0;
+    const tiktok = parseInt(form.tiktok_sold) || 0;
+
+    const payload = {
+      product_code: form.product_code.trim().toUpperCase(),
+      product_name: form.product_name.trim(),
+      category: form.category,
+      stock: parseInt(form.stock) || 0,
+      shopee_sold: shopee,
+      lazada_sold: lazada,
+      tiktok_sold: tiktok,
+      total_sold: shopee + lazada + tiktok,
+      image_url,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error: dbErr } = await supabase.from("inventory").insert([payload]);
+    if (dbErr) {
+      setError(dbErr.message);
+      setSaving(false);
+      return;
+    }
+
+    onSaved();
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        {/* Modal header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <h2 className="text-base font-bold text-gray-800">Add New Product</h2>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="px-6 py-4 space-y-4">
+          {/* Code + Category */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">
+                Product Code *
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. F036"
+                value={form.product_code}
+                onChange={(e) => set("product_code", e.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-300"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">
+                Category *
+              </label>
+              <select
+                value={form.category}
+                onChange={(e) => set("category", e.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-300"
+              >
+                <option value="Women">Women</option>
+                <option value="Men">Men</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Product name */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">
+              Product Name *
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. Dior Sauvage dupe 85ml"
+              value={form.product_name}
+              onChange={(e) => set("product_name", e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-300"
+            />
+          </div>
+
+          {/* Stock + Sales */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-amber-700 mb-1 uppercase tracking-wide">
+                Stock on Hand
+              </label>
+              <input
+                type="number"
+                min="0"
+                placeholder="0"
+                value={form.stock}
+                onChange={(e) => set("stock", e.target.value)}
+                className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-red-600 mb-1 uppercase tracking-wide">
+                Shopee Sold
+              </label>
+              <input
+                type="number"
+                min="0"
+                placeholder="0"
+                value={form.shopee_sold}
+                onChange={(e) => set("shopee_sold", e.target.value)}
+                className="w-full border border-red-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-300"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-indigo-700 mb-1 uppercase tracking-wide">
+                Lazada Sold
+              </label>
+              <input
+                type="number"
+                min="0"
+                placeholder="0"
+                value={form.lazada_sold}
+                onChange={(e) => set("lazada_sold", e.target.value)}
+                className="w-full border border-indigo-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-700 mb-1 uppercase tracking-wide">
+                TikTok Sold
+              </label>
+              <input
+                type="number"
+                min="0"
+                placeholder="0"
+                value={form.tiktok_sold}
+                onChange={(e) => set("tiktok_sold", e.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+              />
+            </div>
+          </div>
+
+          {error && (
+            <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2 border border-red-200">
+              {error}
+            </p>
+          )}
+        </div>
+
+        {/* Modal footer */}
+        <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={saving}
+            className="px-5 py-2 text-sm font-semibold text-white bg-red-700 rounded-lg hover:bg-red-600 disabled:opacity-50 transition-colors"
+          >
+            {saving ? "Saving…" : "Add Product"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── ImageCell ──────────────────────────────────────────────────────────────
+
+function ImageCell({ item, onUploaded }) {
+  const fileInputRef = useRef();
+  const [uploading, setUploading] = useState(false);
+
+  const handleFile = async (file) => {
+    if (!file) return;
+    setUploading(true);
+    const imageUrl = await uploadImage(file);
+    if (imageUrl) {
+      const { error } = await supabase
+        .from("inventory")
+        .update({ image_url: imageUrl, updated_at: new Date().toISOString() })
+        .eq("id", item.id);
+      if (!error) onUploaded(item.id, imageUrl);
+    }
+    setUploading(false);
+  };
+
+  return (
+    <td className="px-2 py-1.5 text-center border-r border-gray-200 w-16">
+      <div
+        onClick={() => !uploading && fileInputRef.current?.click()}
+        title={item.image_url ? "Click to replace image" : "Click to add image"}
+        className="mx-auto w-10 h-10 rounded-md overflow-hidden border border-gray-200 cursor-pointer hover:ring-2 hover:ring-red-400 transition-all flex items-center justify-center bg-gray-50"
+      >
+        {uploading ? (
+          <span className="text-xs text-gray-400 animate-pulse">↑</span>
+        ) : item.image_url ? (
+          <img
+            src={item.image_url}
+            alt={item.product_name}
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <ImageIcon size={14} className="text-gray-300" />
+        )}
+      </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => handleFile(e.target.files[0])}
+      />
+    </td>
+  );
+}
+
+// ── Inventory ──────────────────────────────────────────────────────────────
 
 function Inventory() {
   const [inventory, setInventory] = useState([]);
@@ -10,8 +309,9 @@ function Inventory() {
   const [search, setSearch] = useState("");
   const [filterCategory, setFilterCategory] = useState("All");
   const [lastUpdated, setLastUpdated] = useState(null);
-  const [editingStock, setEditingStock] = useState(null); 
+  const [editingStock, setEditingStock] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
 
   const fetchInventory = useCallback(async () => {
     setLoading(true);
@@ -31,6 +331,13 @@ function Inventory() {
   useEffect(() => {
     fetchInventory();
   }, [fetchInventory]);
+
+  // Update image in local state after upload (no full refetch needed)
+  const handleImageUploaded = (id, imageUrl) => {
+    setInventory((prev) =>
+      prev.map((i) => (i.id === id ? { ...i, image_url: imageUrl } : i)),
+    );
+  };
 
   const filtered = inventory.filter((item) => {
     const matchCat =
@@ -79,7 +386,7 @@ function Inventory() {
     if (e.key === "Escape") setEditingStock(null);
   };
 
-  const isLowStock = (item) => (item.stock ?? 0) <= 5;
+  const TOTAL_COLS = 10;
 
   return (
     <div className="p-6 space-y-4">
@@ -87,30 +394,29 @@ function Inventory() {
       <div className="bg-white rounded-lg shadow p-6 flex flex-col md:flex-row md:items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-gray-800">Inventory</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Live stock · Auto-deducts on completed orders
-            {lastUpdated && (
-              <span className="ml-2 text-gray-400">
-                · {lastUpdated.toLocaleTimeString()}
-              </span>
-            )}
-          </p>
         </div>
-        <button
-          onClick={fetchInventory}
-          disabled={loading}
-          className="px-4 py-2 bg-red-700 text-white rounded-lg text-sm font-medium hover:bg-red-600 transition-colors disabled:opacity-50 self-start md:self-auto cursor-pointer"
-        >
-          {loading ? "↻ Loading…" : "↻ Refresh"}
-        </button>
+        <div className="flex gap-2 self-start md:self-auto">
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="flex items-center gap-1.5 px-4 py-2 bg-gray-800 text-white rounded-lg text-sm font-medium hover:bg-gray-700 transition-colors cursor-pointer"
+          >
+            <Plus size={15} />
+            Add Product
+          </button>
+          <button
+            onClick={fetchInventory}
+            disabled={loading}
+            className="px-4 py-2 bg-red-700 text-white rounded-lg text-sm font-medium hover:bg-red-600 transition-colors disabled:opacity-50 cursor-pointer"
+          >
+            {loading ? "↻ Loading…" : "↻ Refresh"}
+          </button>
+        </div>
       </div>
-
-      
 
       {/* Filters */}
       <div className="bg-white rounded-lg shadow px-4 py-3 flex flex-col md:flex-row gap-3 items-center">
         <div className="relative flex-1">
-          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
             <Search size={18} />
           </span>
           <input
@@ -153,12 +459,13 @@ function Inventory() {
         </p>
       </div>
 
-      {/* Table — spreadsheet style matching the photo */}
+      {/* Table */}
       <div className="bg-white rounded-lg shadow overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm border-collapse">
+          <table className="w-full text-sm border-collapse border border-gray-300">
             <thead>
               <tr>
+                {/* rowSpan=2 headers */}
                 <th
                   className="bg-gray-100 border border-gray-300 w-8"
                   rowSpan={2}
@@ -175,10 +482,11 @@ function Inventory() {
                 >
                   PRODUCT NAME
                 </th>
+
                 <th className="bg-amber-400 text-amber-900 border border-amber-500 px-3 py-1.5 text-center text-xs font-bold">
                   STOCK
                 </th>
-                <th className=" bg-[#EE4D2D]  text-white border border-red-600 px-3 py-1.5 text-center text-xs font-bold">
+                <th className="bg-[#EE4D2D] text-white border border-red-600 px-3 py-1.5 text-center text-xs font-bold">
                   SHOPEE
                 </th>
                 <th className="bg-violet-700 text-white border border-indigo-800 px-3 py-1.5 text-center text-xs font-bold">
@@ -189,6 +497,12 @@ function Inventory() {
                 </th>
                 <th className="bg-gray-600 text-white border border-gray-700 px-3 py-1.5 text-center text-xs font-bold">
                   TOTAL SOLD
+                </th>
+                <th
+                  className="bg-emerald-800 text-white border border-emerald-700 px-3 py-1.5 text-center text-xs font-bold"
+                  rowSpan={1}
+                >
+                  ACTION
                 </th>
               </tr>
               <tr>
@@ -207,6 +521,9 @@ function Inventory() {
                 <th className="bg-gray-100 border border-gray-200 px-3 py-1 text-center text-xs font-semibold text-gray-700">
                   QTY
                 </th>
+                <th className="bg-emerald-100 border border-emerald-200 px-3 py-1 text-center text-xs font-semibold text-emerald-800">
+                  VIEW · EDIT · ARCHIVE
+                </th>
               </tr>
             </thead>
 
@@ -214,7 +531,7 @@ function Inventory() {
               {loading ? (
                 [...Array(10)].map((_, i) => (
                   <tr key={i} className="border-b border-gray-100">
-                    {[...Array(8)].map((_, j) => (
+                    {[...Array(TOTAL_COLS)].map((_, j) => (
                       <td key={j} className="px-3 py-2">
                         <div className="h-4 bg-gray-100 rounded animate-pulse" />
                       </td>
@@ -224,7 +541,7 @@ function Inventory() {
               ) : filtered.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={TOTAL_COLS}
                     className="px-4 py-12 text-center text-gray-400"
                   >
                     <p className="text-4xl mb-2">📦</p>
@@ -244,7 +561,7 @@ function Inventory() {
                       rows.push(
                         <tr key={`cat-${item.category}`}>
                           <td
-                            colSpan={8}
+                            colSpan={TOTAL_COLS}
                             className={`px-3 py-1.5 text-xs font-bold text-white border ${
                               item.category === "Men"
                                 ? "bg-blue-600 border-blue-700"
@@ -273,12 +590,17 @@ function Inventory() {
                         key={item.id}
                         className={`${rowBg} border-b border-gray-200 transition-colors`}
                       >
+                        {/* Row number */}
                         <td className="px-2 py-1.5 text-center text-xs text-gray-400 bg-gray-50 border-r border-gray-200 w-8">
                           {rowNum++}
                         </td>
+
+                        {/* Code */}
                         <td className="px-3 py-1.5 text-xs font-mono text-gray-500 border-r border-gray-200 whitespace-nowrap">
                           {item.product_code}
                         </td>
+
+                        {/* Name */}
                         <td className="px-3 py-1.5 text-xs text-gray-800 border-r border-gray-200">
                           <div className="flex items-center gap-2">
                             {item.product_name}
@@ -320,7 +642,7 @@ function Inventory() {
                               className={`text-xs font-bold px-2 py-0.5 rounded cursor-pointer hover:ring-2 hover:ring-amber-400 transition-all ${
                                 low
                                   ? "text-red-700 bg-red-100"
-                                  : "text-amber-800 bg-amber-100"
+                                  : "text-black bg-white-100"
                               }`}
                             >
                               {item.stock ?? 0}
@@ -328,25 +650,57 @@ function Inventory() {
                           )}
                         </td>
 
+                        {/* Shopee */}
                         <td
                           className={`px-3 py-1.5 text-center text-xs font-semibold border-r border-red-100 ${(item.shopee_sold || 0) > 0 ? "text-red-700" : "text-gray-300"}`}
                         >
                           {item.shopee_sold || 0}
                         </td>
+
+                        {/* Lazada */}
                         <td
                           className={`px-3 py-1.5 text-center text-xs font-semibold border-r border-indigo-100 ${(item.lazada_sold || 0) > 0 ? "text-indigo-700" : "text-gray-300"}`}
                         >
                           {item.lazada_sold || 0}
                         </td>
+
+                        {/* TikTok */}
                         <td
                           className={`px-3 py-1.5 text-center text-xs font-semibold border-r border-gray-200 ${(item.tiktok_sold || 0) > 0 ? "text-gray-800" : "text-gray-300"}`}
                         >
                           {item.tiktok_sold || 0}
                         </td>
+
+                        {/* Total sold */}
                         <td
                           className={`px-3 py-1.5 text-center text-xs font-bold ${(item.total_sold || 0) > 0 ? "text-gray-800" : "text-gray-300"}`}
                         >
                           {item.total_sold || 0}
+                        </td>
+                        <td className="px-1.5 py-1 text-center border border-gray-300 ">
+                          <div className="flex items-center justify-center gap-5">
+                            <button
+                              onClick={() => onView?.(item)}
+                              title="View"
+                              className="p-0.5 rounded hover:bg-blue-100 transition-colors cursor-pointer"
+                            >
+                              <Eye size={20} className="text-blue-600" />
+                            </button>
+                            <button
+                              onClick={() => onEdit?.(item)}
+                              title="Edit"
+                              className="p-0.5 rounded hover:bg-amber-100 transition-colors cursor-pointer"
+                            >
+                              <Pencil size={20} className="text-amber-600" />
+                            </button>
+                            <button
+                              onClick={() => onArchive?.(item)}
+                              title="Archive"
+                              className="p-0.5 rounded hover:bg-pink-100 transition-colors cursor-pointer"
+                            >
+                              <Archive size={20} className="text-pink-600" />
+                            </button>
+                          </div>
                         </td>
                       </tr>,
                     );
@@ -365,6 +719,8 @@ function Inventory() {
                   <td className="px-3 py-2 text-xs text-amber-900 border-r border-amber-500">
                     TOTAL ({filtered.length} products)
                   </td>
+                  {/* empty IMAGE cell in footer */}
+                  <td className="border-r border-amber-500" />
                   <td className="px-3 py-2 text-center text-xs font-bold text-amber-900 border-r border-amber-500">
                     {totals.stock.toLocaleString()}
                   </td>
@@ -397,25 +753,15 @@ function Inventory() {
           <span className="w-3 h-3 rounded bg-red-100 border border-red-300 inline-block" />
           Low stock (≤ 5)
         </span>
-        <span className="text-gray-400">
-          · Click stock number to edit · COMPLETED orders only
-        </span>
       </div>
-    </div>
-  );
-}
 
-function SummaryCard({ label, value, bg, text }) {
-  return (
-    <div className={`rounded-lg shadow p-4 ${bg}`}>
-      <p
-        className={`text-xs font-semibold uppercase tracking-wide opacity-80 ${text}`}
-      >
-        {label}
-      </p>
-      <p className={`text-3xl font-bold mt-1 ${text}`}>
-        {value.toLocaleString()}
-      </p>
+      {/* Add Product Modal */}
+      {showAddModal && (
+        <AddProductModal
+          onClose={() => setShowAddModal(false)}
+          onSaved={fetchInventory}
+        />
+      )}
     </div>
   );
 }
